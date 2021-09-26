@@ -35,6 +35,7 @@ pub trait ProofScheme<'a> {
         info!("generating {} groth proofs.", partition_count);
 
         let start = Instant::now();
+        println!("===== prove => prove_all_partitions start...");
 
         let result = (0..partition_count)
             .map(|k| {
@@ -53,7 +54,7 @@ pub trait ProofScheme<'a> {
 
         let total_proof_time = start.elapsed();
         info!("total_groth_proof_time: {:?}", total_proof_time);
-
+        println!("===== prove => prove_all_partitions end duration:{:?}", total_proof_time);
         result
     }
 
@@ -74,6 +75,8 @@ pub trait ProofScheme<'a> {
         pub_in: &Self::PublicInputs,
         proofs: &[Self::Proof],
     ) -> Result<bool> {
+        let start = Instant::now();
+        println!("===== prove => verify_all_partitions start...");
         for (k, proof) in proofs.iter().enumerate() {
             let partition_pub_in = Self::with_partition((*pub_in).clone(), Some(k)); //
 
@@ -81,7 +84,7 @@ pub trait ProofScheme<'a> {
                 return Ok(false);
             }
         }
-
+        println!("===== prove => verify_all_partitions end duration:{:?}", start.elapsed());
         Ok(true)
     }
 
