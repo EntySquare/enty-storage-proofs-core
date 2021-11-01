@@ -1,6 +1,5 @@
 use anyhow::{ensure, Context};
 use bellperson::{
-    bls::{Bls12, Fr},
     groth16::{
         self,
         aggregate::{
@@ -11,6 +10,7 @@ use bellperson::{
     },
     Circuit,
 };
+use blstrs::{Bls12, Scalar as Fr};
 use log::info;
 use rand::{rngs::OsRng, RngCore};
 use rayon::prelude::{
@@ -24,7 +24,6 @@ use crate::{
     partitions::partition_count,
     proof::ProofScheme,
 };
-use std::time::Instant;
 
 #[derive(Clone)]
 pub struct SetupParams<'a, S: ProofScheme<'a>> {
@@ -54,12 +53,12 @@ pub trait CircuitComponent {
 /// See documentation at proof::ProofScheme for details.
 /// Implementations should generally only need to supply circuit and generate_public_inputs.
 /// The remaining trait methods are used internally and implement the necessary plumbing.
-pub trait CompoundProof<'a, S: ProofScheme<'a>, C: Circuit<Bls12> + CircuitComponent + Send>
-    where
-        S::Proof: Sync + Send,
-        S::PublicParams: ParameterSetMetadata + Sync + Send,
-        S::PublicInputs: Clone + Sync,
-        Self: CacheableParameters<C, S::PublicParams>,
+pub trait CompoundProof<'a, S: ProofScheme<'a>, C: Circuit<Fr> + CircuitComponent + Send>
+where
+    S::Proof: Sync + Send,
+    S::PublicParams: ParameterSetMetadata + Sync + Send,
+    S::PublicInputs: Clone + Sync,
+    Self: CacheableParameters<C, S::PublicParams>,
 {
     // setup is equivalent to ProofScheme::setup.
     fn setup(sp: &SetupParams<'a, S>) -> Result<PublicParams<'a, S>> {
@@ -85,37 +84,22 @@ pub trait CompoundProof<'a, S: ProofScheme<'a>, C: Circuit<Bls12> + CircuitCompo
         priv_in: &S::PrivateInputs,
         groth_params: &'b groth16::MappedParameters<Bls12>,
     ) -> Result<MultiProof<'b>> {
-        let start = Instant::now();
-        println!("===== compound_proof.prove start...");
         let partition_count = Self::partition_count(pub_params);
-        println!("===== compound_proof.prove partition_count ={}",partition_count);
 
         // This will always run at least once, since there cannot be zero partitions.
         ensure!(partition_count > 0, "There must be partitions");
 
         info!("vanilla_proofs:start");
-        let now = Instant::now();
-        println!("===== prove: gen vanilla_proofs start...");
-        let vanilla_proofs = S::prove_all_partitions(
-            &pub_params.vanilla_params,
-            &pub_in,
-            priv_in,
-            partition_count,
-        )?;
-        println!("===== prove: gen vanilla_proofs end duration:{:?}", now.elapsed());
+        let vanilla_proofs =
+            S::prove_all_partitions(&pub_params.vanilla_params, pub_in, priv_in, partition_count)?;
 
         info!("vanilla_proofs:finish");
 
-        let now = Instant::now();
-        println!("===== prove: gen sanity_check start...");
         let sanity_check =
-            S::verify_all_partitions(&pub_params.vanilla_params, &pub_in, &vanilla_proofs)?;
+            S::verify_all_partitions(&pub_params.vanilla_params, pub_in, &vanilla_proofs)?;
         ensure!(sanity_check, "sanity check failed");
-        println!("===== prove: gen sanity_check end duration:{:?}", now.elapsed());
 
         info!("snark_proof:start");
-        let now = Instant::now();
-        println!("===== prove: gen groth_proofs start...");
         let groth_proofs = Self::circuit_proofs(
             pub_in,
             vanilla_proofs,
@@ -123,10 +107,8 @@ pub trait CompoundProof<'a, S: ProofScheme<'a>, C: Circuit<Bls12> + CircuitCompo
             groth_params,
             pub_params.priority,
         )?;
-        println!("===== prove: gen groth_proofs end duration:{:?}", now.elapsed());
         info!("snark_proof:finish");
 
-        println!("===== compound_proof.prove end duration:{:?}", start.elapsed());
         Ok(MultiProof::new(groth_proofs, &groth_params.pvk))
     }
 
@@ -183,7 +165,7 @@ pub trait CompoundProof<'a, S: ProofScheme<'a>, C: Circuit<Bls12> + CircuitCompo
             .collect::<Result<_>>()?;
 
         let proofs: Vec<_> = multi_proof.circuit_proofs.iter().collect();
-        let res = verify_proofs_batch(&pvk, &mut OsRng, &proofs, &inputs)?;
+        let res = verify_proofs_batch(pvk, &mut OsRng, &proofs, &inputs)?;
         Ok(res)
     }
 
@@ -238,7 +220,7 @@ pub trait CompoundProof<'a, S: ProofScheme<'a>, C: Circuit<Bls12> + CircuitCompo
             .flat_map(|m| m.circuit_proofs.iter())
             .collect();
 
-        let res = verify_proofs_batch(&pvk, &mut OsRng, &circuit_proofs[..], &inputs)?;
+        let res = verify_proofs_batch(pvk, &mut OsRng, &circuit_proofs[..], &inputs)?;
 
         Ok(res)
     }
@@ -259,35 +241,27 @@ pub trait CompoundProof<'a, S: ProofScheme<'a>, C: Circuit<Bls12> + CircuitCompo
             !vanilla_proofs.is_empty(),
             "cannot create a circuit proof over missing vanilla proofs"
         );
-        let start = Instant::now();
-        println!("===== prove => circuit_proofs start...");
 
-        let now = Instant::now();
-        println!("===== prove => circuit_proofs:gen circuits start...");
         let circuits = vanilla_proofs
             .into_par_iter()
             .enumerate()
             .map(|(k, vanilla_proof)| {
                 Self::circuit(
-                    &pub_in,
+                    pub_in,
                     C::ComponentPrivateInputs::default(),
                     &vanilla_proof,
-                    &pub_params,
+                    pub_params,
                     Some(k),
                 )
             })
             .collect::<Result<Vec<_>>>()?;
-        println!("===== prove => circuit_proofs:gen circuits end duration:{:?}",now.elapsed());
 
-        let now = Instant::now();
-        println!("===== prove => circuit_proofs:create_random_proof_batch start...");
         let groth_proofs = if priority {
             create_random_proof_batch_in_priority(circuits, groth_params, &mut rng)?
         } else {
             create_random_proof_batch(circuits, groth_params, &mut rng)?
         };
-        println!("===== prove => circuit_proofs:create_random_proof_batch end duration:{:?}",now.elapsed());
-        println!("===== prove => circuit_proofs end duration:{:?}",start.elapsed());
+
         groth_proofs
             .into_iter()
             .map(|groth_proof| {
@@ -444,7 +418,7 @@ pub trait CompoundProof<'a, S: ProofScheme<'a>, C: Circuit<Bls12> + CircuitCompo
             private_inputs,
             partition_count,
         )
-            .context("failed to generate partition proofs")?;
+        .context("failed to generate partition proofs")?;
 
         ensure!(
             vanilla_proofs.len() == partition_count,
@@ -452,7 +426,7 @@ pub trait CompoundProof<'a, S: ProofScheme<'a>, C: Circuit<Bls12> + CircuitCompo
         );
 
         let partitions_are_verified =
-            S::verify_all_partitions(vanilla_params, &public_inputs, &vanilla_proofs)
+            S::verify_all_partitions(vanilla_params, public_inputs, &vanilla_proofs)
                 .context("failed to verify partition proofs")?;
 
         ensure!(partitions_are_verified, "Vanilla proof didn't verify.");
@@ -488,7 +462,7 @@ pub trait CompoundProof<'a, S: ProofScheme<'a>, C: Circuit<Bls12> + CircuitCompo
             private_inputs,
             partition_count,
         )
-            .context("failed to generate partition proofs")?;
+        .context("failed to generate partition proofs")?;
 
         ensure!(
             vanilla_proofs.len() == partition_count,
@@ -496,7 +470,7 @@ pub trait CompoundProof<'a, S: ProofScheme<'a>, C: Circuit<Bls12> + CircuitCompo
         );
 
         let partitions_are_verified =
-            S::verify_all_partitions(vanilla_params, &public_inputs, &vanilla_proofs)
+            S::verify_all_partitions(vanilla_params, public_inputs, &vanilla_proofs)
                 .context("failed to verify partition proofs")?;
 
         ensure!(partitions_are_verified, "Vanilla proof didn't verify.");

@@ -4,24 +4,23 @@
 //! This can be thought of as a generalization of `AllocatedNum::conditionally_reverse` and reduces to it in the binary case.
 
 use bellperson::{
-    bls::Engine,
     gadgets::{
         boolean::{AllocatedBit, Boolean},
         num::AllocatedNum,
     },
     ConstraintSystem, SynthesisError,
 };
-use ff::Field;
+use ff::PrimeField;
 
 /// Insert `element` after the nth 1-indexed element of `elements`, where `path_bits` represents n, least-significant bit first.
 /// The returned result contains a new vector of `AllocatedNum`s with `element` inserted, and constraints are enforced.
 /// `elements.len() + 1` must be a power of two.
-pub fn insert<E: Engine, CS: ConstraintSystem<E>>(
+pub fn insert<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     cs: &mut CS,
-    element: &AllocatedNum<E>,
+    element: &AllocatedNum<Scalar>,
     bits: &[Boolean],
-    elements: &[AllocatedNum<E>],
-) -> Result<Vec<AllocatedNum<E>>, SynthesisError> {
+    elements: &[AllocatedNum<Scalar>],
+) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError> {
     let size = elements.len() + 1;
     assert_eq!(1 << bits.len(), size);
 
@@ -91,12 +90,12 @@ pub fn insert<E: Engine, CS: ConstraintSystem<E>>(
     Ok(result)
 }
 
-pub fn insert_2<E: Engine, CS: ConstraintSystem<E>>(
+pub fn insert_2<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     cs: &mut CS,
-    element: &AllocatedNum<E>,
+    element: &AllocatedNum<Scalar>,
     bits: &[Boolean],
-    elements: &[AllocatedNum<E>],
-) -> Result<Vec<AllocatedNum<E>>, SynthesisError> {
+    elements: &[AllocatedNum<Scalar>],
+) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError> {
     assert_eq!(elements.len() + 1, 2);
     assert_eq!(bits.len(), 1);
 
@@ -105,23 +104,23 @@ pub fn insert_2<E: Engine, CS: ConstraintSystem<E>>(
             cs.namespace(|| "binary insert 0"),
             &bits[0],
             &elements[0],
-            &element,
+            element,
         )?,
         pick(
             cs.namespace(|| "binary insert 1"),
             &bits[0],
-            &element,
+            element,
             &elements[0],
         )?,
     ])
 }
 
-pub fn insert_4<E: Engine, CS: ConstraintSystem<E>>(
+pub fn insert_4<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     cs: &mut CS,
-    element: &AllocatedNum<E>,
+    element: &AllocatedNum<Scalar>,
     bits: &[Boolean],
-    elements: &[AllocatedNum<E>],
-) -> Result<Vec<AllocatedNum<E>>, SynthesisError> {
+    elements: &[AllocatedNum<Scalar>],
+) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError> {
     assert_eq!(elements.len() + 1, 4);
     assert_eq!(bits.len(), 2);
 
@@ -172,12 +171,12 @@ pub fn insert_4<E: Engine, CS: ConstraintSystem<E>>(
 }
 
 #[allow(clippy::many_single_char_names)]
-pub fn insert_8<E: Engine, CS: ConstraintSystem<E>>(
+pub fn insert_8<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     cs: &mut CS,
-    element: &AllocatedNum<E>,
+    element: &AllocatedNum<Scalar>,
     bits: &[Boolean],
-    elements: &[AllocatedNum<E>],
-) -> Result<Vec<AllocatedNum<E>>, SynthesisError> {
+    elements: &[AllocatedNum<Scalar>],
+) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError> {
     assert_eq!(elements.len() + 1, 8);
     assert_eq!(bits.len(), 3);
     /*
@@ -284,11 +283,11 @@ pub fn insert_8<E: Engine, CS: ConstraintSystem<E>>(
 /// Select the nth element of `from`, where `path_bits` represents n, least-significant bit first.
 /// The returned result contains the selected element, and constraints are enforced.
 /// `from.len()` must be a power of two.
-pub fn select<E: Engine, CS: ConstraintSystem<E>>(
+pub fn select<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    from: &[AllocatedNum<E>],
+    from: &[AllocatedNum<Scalar>],
     path_bits: &[Boolean],
-) -> Result<AllocatedNum<E>, SynthesisError> {
+) -> Result<AllocatedNum<Scalar>, SynthesisError> {
     let pathlen = path_bits.len();
     assert_eq!(1 << pathlen, from.len());
 
@@ -317,14 +316,14 @@ pub fn select<E: Engine, CS: ConstraintSystem<E>>(
 }
 
 /// Takes two allocated numbers (`a`, `b`) and returns `a` if the condition is true, and `b` otherwise.
-pub fn pick<E: Engine, CS: ConstraintSystem<E>>(
+pub fn pick<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     condition: &Boolean,
-    a: &AllocatedNum<E>,
-    b: &AllocatedNum<E>,
-) -> Result<AllocatedNum<E>, SynthesisError>
+    a: &AllocatedNum<Scalar>,
+    b: &AllocatedNum<Scalar>,
+) -> Result<AllocatedNum<Scalar>, SynthesisError>
 where
-    CS: ConstraintSystem<E>,
+    CS: ConstraintSystem<Scalar>,
 {
     let c = AllocatedNum::alloc(cs.namespace(|| "pick result"), || {
         if condition
@@ -342,7 +341,7 @@ where
     cs.enforce(
         || "pick",
         |lc| lc + b.get_variable() - a.get_variable(),
-        |_| condition.lc(CS::one(), E::Fr::one()),
+        |_| condition.lc(CS::one(), Scalar::one()),
         |lc| lc + b.get_variable() - c.get_variable(),
     );
 
@@ -353,10 +352,9 @@ where
 mod tests {
     use super::*;
 
-    use bellperson::{
-        bls::{Bls12, Fr},
-        util_cs::test_cs::TestConstraintSystem,
-    };
+    use bellperson::util_cs::test_cs::TestConstraintSystem;
+    use blstrs::Scalar as Fr;
+    use ff::Field;
     use rand::SeedableRng;
     use rand_xorshift::XorShiftRng;
 
@@ -368,15 +366,15 @@ mod tests {
             let size = 1 << log_size;
             for index in 0..size {
                 // Initialize rng in loop to simplify debugging with consistent elements.
-                let rng = &mut XorShiftRng::from_seed(TEST_SEED);
+                let mut rng = XorShiftRng::from_seed(TEST_SEED);
                 let mut cs = TestConstraintSystem::new();
 
                 let elements: Vec<_> = (0..size)
                     .map(|i| {
-                        AllocatedNum::<Bls12>::alloc(
+                        AllocatedNum::<Fr>::alloc(
                             &mut cs.namespace(|| format!("element {}", i)),
                             || {
-                                let elt = <Fr as Field>::random(rng);
+                                let elt = Fr::random(&mut rng);
                                 Ok(elt)
                             },
                         )
@@ -420,15 +418,15 @@ mod tests {
             let size = 1 << log_size;
             for index in 0..size {
                 // Initialize rng in loop to simplify debugging with consistent elements.
-                let rng = &mut XorShiftRng::from_seed(TEST_SEED);
+                let mut rng = XorShiftRng::from_seed(TEST_SEED);
                 let mut cs = TestConstraintSystem::new();
 
                 let elements: Vec<_> = (0..size - 1)
                     .map(|i| {
-                        AllocatedNum::<Bls12>::alloc(
+                        AllocatedNum::<Fr>::alloc(
                             &mut cs.namespace(|| format!("element {}", i)),
                             || {
-                                let elt = <Fr as Field>::random(rng);
+                                let elt = Fr::random(&mut rng);
                                 Ok(elt)
                             },
                         )
@@ -436,12 +434,11 @@ mod tests {
                     })
                     .collect();
 
-                let to_insert =
-                    AllocatedNum::<Bls12>::alloc(&mut cs.namespace(|| "insert"), || {
-                        let elt_to_insert = <Fr as Field>::random(rng);
-                        Ok(elt_to_insert)
-                    })
-                    .expect("alloc failed");
+                let to_insert = AllocatedNum::<Fr>::alloc(&mut cs.namespace(|| "insert"), || {
+                    let elt_to_insert = Fr::random(&mut rng);
+                    Ok(elt_to_insert)
+                })
+                .expect("alloc failed");
 
                 let index_bits = (0..log_size)
                     .map(|i| {
@@ -462,7 +459,7 @@ mod tests {
                     &mut cs,
                     &to_insert.clone(),
                     index_bits.as_slice(),
-                    &elements.as_slice(),
+                    elements.as_slice(),
                 )
                 .expect("insert failed");
 
